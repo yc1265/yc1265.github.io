@@ -1,0 +1,679 @@
+---
+title: "In danger: Patterns and trends in attacks on humanitarian aid workers in conflict zones"
+date: last-modified
+date-format: long
+format:
+    html: 
+        embed-resources: true
+        light: [cosmo, style/html-sta313.scss]
+        dark: [cosmo, style/html-sta313.scss, style/html-dark.scss]
+        toc: true
+        code-copy: true
+        code-overflow: wrap
+        mainfont: "Atkinson Hyperlegible"
+        code-annotations: hover
+execute:
+    echo: true
+    warning: false
+    message: false
+    freeze: auto
+---
+
+# Descriptive Portion
+
+## Crisis escalation and shift of dangerous areas
+
+```{python}
+#| code-fold: true
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import plotly.express as px
+import plotly.graph_objects as go
+import numpy as np
+import altair as alt
+
+df = pd.read_csv("security_incidents.csv" )
+df['Year'] = df['Year'].astype(int)
+```
+
+```{python}
+#| code-fold: true
+# Create line chart with all four metrics
+fig = px.line(
+    df.groupby('Year').agg({
+        'Total killed':'sum',
+        'Total kidnapped':'sum',
+        'Total wounded':'sum',
+        'Total affected':'sum'
+    }).reset_index(),
+    x='Year', 
+    y=['Total killed', 'Total kidnapped', 'Total wounded', 'Total affected'],
+    labels={
+        'value': 'Number of People',
+        'variable': 'Casualty Type',
+        'Year': 'Year'
+    },
+    title='Global Humanitarian Worker Casualties (1997-2024)',
+    color_discrete_sequence=['#d62728', '#1f77b4', '#ff7f0e', '#2ca02c']  # Red, Blue, Orange, Green
+)
+
+fig.add_vrect(
+    x0=2001, 
+    x1=2003,
+    fillcolor="gray", 
+    opacity=0.2, 
+    annotation_text="9/11 Impact Period",
+    annotation_position="top left"
+)
+
+# Customize line dash styles for better differentiation
+fig.update_traces(
+    line=dict(width=2.5),
+    selector=dict(name='Total wounded')
+)
+fig.update_traces(
+    line=dict(dash='dot', width=2),
+    selector=dict(name='Total affected')
+)
+
+fig.show()
+```
+
+```{python}
+#| code-fold: true
+# Create interactive heatmap with labels
+fig = px.density_mapbox(
+    df,
+    lat='Latitude',
+    lon='Longitude',
+    z='Total killed',
+    hover_name='Country',
+    animation_frame='Year',
+    range_color=[0, 50],
+    zoom=1,
+    height=600,
+    title='Fatalities Among Humanitarian Workers: Global Heatmap (1997-2024)',
+    labels={
+        'Total killed': 'Fatalities',
+        'Year': 'Year',
+        'Latitude': 'Latitude',
+        'Longitude': 'Longitude'
+    },
+    color_continuous_scale='hot'
+)
+
+# Configure map and layout with settings
+fig.update_layout(
+    mapbox_style="open-street-map",
+    mapbox=dict(
+        center=dict(lat=20, lon=20),
+        zoom=1
+    ),
+    margin={"r": 0, "t": 40, "l": 0, "b": 0},
+    coloraxis_colorbar=dict(
+        title='Number of Fatalities',
+        titleside='right'
+    )
+)
+
+# Configure timeline slider
+fig.update_layout(
+    sliders=[{
+        "currentvalue": {
+            "prefix": "Year: ",
+            "font": {"color": "black"}
+        }
+    }]
+)
+
+fig.show()
+```
+
+## Attacker behavior evolves
+
+```{python}
+#| code-fold: true
+# Filter out rows where the 'Means of attack' is 'Unknown'
+df_clean = df[df['Means of attack'] != 'Unknown']
+
+# Group the data by 'Year' and 'Means of attack', and count occurrences, then unstack the results
+yearly_means = df_clean.groupby(['Year', 'Means of attack']).size().unstack().fillna(0)
+
+# Calculate the percentage of each attack method per year
+yearly_pct = yearly_means.div(yearly_means.sum(axis=1), axis=0) * 100
+
+# Reset index for melting the DataFrame and prepare for visualization
+yearly_pct = yearly_pct.reset_index().melt(id_vars='Year', var_name='Means', value_name='Percentage')
+
+# Define a custom color palette for the area plot
+custom_colors = [
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+    '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+    '#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5',
+    '#c49c94'
+]
+
+# Create an area plot using Plotly Express
+fig = px.area(
+    yearly_pct,
+    x='Year', 
+    y='Percentage',  
+    color='Means',  
+    title='Attack Methods Proportion Over Time (%)',  
+    labels={'Percentage': 'Proportion %'}, 
+    color_discrete_sequence=custom_colors  
+)
+
+# Set the Y-axis range to 0-100%
+fig.update_layout(yaxis_range=[0, 100])
+
+```
+
+```{python}
+#| code-fold: true
+# Group the data by 'Year' and 'Motive', and count occurrences, then reset index
+motive_by_year = df.groupby(["Year", "Motive"]).size().reset_index(name='Count')
+
+# Group the data by 'Year' and 'Actor type', and count occurrences, then reset index
+actor_by_year = df.groupby(["Year", "Actor type"]).size().reset_index(name='Count')
+
+# Convert 'Actor type' to lowercase for consistency
+actor_by_year["Actor type"] = actor_by_year["Actor type"].str.lower()
+
+# Standardize actor types that refer to non-state armed groups
+actor_by_year.loc[
+    actor_by_year["Actor type"].str.contains("non-state armed groups|non-state armed group|non state armed groups", na=False),
+    "Actor type"
+] = "non-state armed groups"
+
+# Create a selection for highlighting motives in the legend
+highlight = alt.selection_point(fields=["Motive"], bind="legend")
+
+# Create a line chart for attacker motivations over time
+motive_chart = alt.Chart(motive_by_year).mark_line(point=True).encode(
+    x=alt.X("Year:O", title="Year", axis=alt.Axis(labelAngle=0, labelExpr="datum.value % 2 == 0 ? datum.value : ''")),  
+    y=alt.Y("Count:Q", title="Attack Count"),  
+    color=alt.Color("Motive:N", title="Motive", scale=alt.Scale(scheme="category10")),
+    tooltip=["Year", "Motive", "Count"],  
+    opacity=alt.condition(highlight, alt.value(1), alt.value(0.15))  # Adjust opacity based on selection
+).add_params(
+    highlight  
+).properties(
+    title="Attacker motivations change over time", 
+    width=600,  
+    height=300 
+).configure_title(
+    fontSize=16, 
+    anchor='start' 
+).configure_axisX(
+    labelFlush=False,  
+    tickMinStep=1  
+)
+
+# Display the motive chart
+motive_chart
+```
+
+```{python}
+#| code-fold: true
+# Create a selection for highlighting actor types in the legend
+highlight_actor = alt.selection_point(fields=["Actor type"], bind="legend")
+
+# Create a dropdown binding for selecting actor types
+actor_dropdown = alt.binding_select(
+    options=sorted(actor_by_year["Actor type"].unique()), 
+    name="Select actor type: " 
+)
+
+# Create a selection point for the actor type based on the dropdown
+selector = alt.selection_point(fields=["Actor type"], bind=actor_dropdown)
+
+# Create a bar chart for trends in attacks by actor type
+actor_chart = alt.Chart(actor_by_year).mark_bar().encode(
+    x=alt.X("Year:O", axis=alt.Axis(
+        labelAngle=0,  
+        labelExpr="datum.value % 2 == 0 ? datum.value : ''",  
+        title="Year"  
+    )),
+    y="Count:Q", 
+    color="Actor type:N",  
+    tooltip=["Year", "Actor type", "Count"]  # Tooltip to display Year, Actor type, and Count
+).add_params(
+    selector  
+).transform_filter(
+    selector  # Filter the data based on the selected actor type
+).properties(
+    title="Trends in Attacks by Actor Type",  
+    width=500, 
+    height=350  
+)
+
+# Display the actor chart
+actor_chart.display()
+```
+
+```{python}
+#| code-fold: true
+# Select relevant columns and drop rows with missing values
+df1 = df[['Year', 'Means of attack', 'Location']].dropna()
+
+# Filter for the top 10 means of attack and top 10 locations to reduce clutter in the analysis
+top_attacks = df1['Means of attack'].value_counts().nlargest(10).index  
+top_locations = df1['Location'].value_counts().nlargest(10).index  
+
+# Create a new DataFrame that includes only the top attacks and locations
+df2 = df1[df1['Means of attack'].isin(top_attacks) & df1['Location'].isin(top_locations)]
+
+# Get the unique years from the filtered DataFrame and sort them
+years = sorted(df2['Year'].unique())
+
+# Initialize an empty list to hold dictionaries for the heatmap data
+heatmap_dicts = []
+
+
+# Generate heatmaps for each year
+for year in years:
+    df_year = df2[df2['Year'] == year]
+    matrix = pd.crosstab(df_year['Means of attack'], df_year['Location'])
+    heatmap_dicts.append(matrix)
+
+# Initialize data (first year)
+init_matrix = heatmap_dicts[0]
+x_labels = list(init_matrix.columns)     # Location
+y_labels = list(init_matrix.index)       # Means of attack
+z_values = init_matrix.values            # Frequency
+
+# Create the plot
+fig = go.Figure()
+
+fig.add_trace(go.Heatmap(
+    z=z_values,
+    x=x_labels,
+    y=y_labels,
+    colorscale='Reds',
+    colorbar=dict(title='Event Count'),
+    zmin=0,
+    zmax=max([m.values.max() for m in heatmap_dicts]),
+    hovertemplate='Location: %{x}<br>Means of Attack: %{y}<br>Event Count: %{z}<extra></extra>'
+))
+
+# Create dropdown buttons for year selection
+buttons = []
+
+for i, year in enumerate(years):
+    matrix = heatmap_dicts[i]
+    z = matrix.values
+    x = list(matrix.columns)
+    y = list(matrix.index)
+    
+    buttons.append(dict(
+        label=str(year),
+        method='update',
+        args=[
+            {'z': [z], 'x': [x], 'y': [y]},
+            {'title': f"Heatmap of Attack Means and Locations - {year}"}
+        ]
+    ))
+
+# Update layout and move the dropdown to the bottom left
+fig.update_layout(
+    title=f"Heatmap of Attack Means and Locations - {years[0]}",
+    updatemenus=[{
+        'buttons': buttons,
+        'direction': 'down',
+        'showactive': True,
+        'x': 1.05,
+        'y': 1.1,
+        'xanchor': 'left',
+        'yanchor': 'top'
+    }],
+    xaxis_title="Location",
+    yaxis_title="Means of Attack",
+    margin=dict(l=40, r=40, t=60, b=40),  
+    height=500  
+)
+
+# Display the chart
+fig.show()
+```
+
+##  Victim profile: Who is most dangerous?
+
+### The most dangerous organization
+
+```{python}
+#| code-fold: true
+# Define the list of organization columns to identify the main organization for each row
+org_cols = ['UN', 'INGO', 'ICRC', 'NRCS and IFRC', 'NNGO', 'Other']
+
+# Create a new column 'Main_Org' that contains the name of the organization with the maximum value for each row
+df['Main_Org'] = df[org_cols].idxmax(axis=1)
+
+# Create a line plot showing annual fatalities by organization type
+fig = px.line(
+    df.groupby(['Year', 'Main_Org'])['Total killed'].sum().reset_index(),  
+    x='Year',  
+    y='Total killed', 
+    color='Main_Org',  
+    line_dash='Main_Org', 
+    title='Annual Fatalities by Organization Type',  
+    labels={'Total killed': 'Death Count', 'Main_Org': 'Organization'}  
+)
+
+# Display the plot
+fig.show()
+```
+
+
+```{python}
+#| code-fold: true
+# Calculate total victims for each organization type by summing the relevant columns
+org_cols = ['UN', 'INGO', 'ICRC', 'NRCS and IFRC', 'NNGO', 'Other']
+org_victims = df[org_cols].sum().sort_values(ascending=False)  
+
+# Initialize a dictionary to store risk metrics for each organization type
+org_risk = {}
+for org in org_cols:
+    org_events = df[df[org] == 1]  # Filter the DataFrame for events associated with the current organization
+    org_risk[org] = {
+        'Event Count': len(org_events),  
+        'Total Killed': org_events['Total killed'].sum(),  
+        'Avg Killed per Event': org_events['Total killed'].mean(),  
+        'Total Wounded': org_events['Total wounded'].sum(), 
+        'Avg Wounded per Event': org_events['Total wounded'].mean()  
+    }
+
+# Create a DataFrame from the org_risk dictionary, transpose it, and sort by average killed per event
+org_risk_df = pd.DataFrame(org_risk).T.sort_values('Avg Killed per Event', ascending=False)
+
+# Create a scatter plot to analyze risk by organization type
+fig = px.scatter(org_risk_df, 
+                 x='Event Count',  
+                 y='Avg Killed per Event',  
+                 size='Total Killed',  # Bubble size represents total deaths
+                 color=org_risk_df.index,  # Color by organization type
+                 title='Risk Analysis by Organization Type (Bubble Size = Total Deaths)', 
+                 labels={
+                     'Event Count': 'Number of Attack Events',  
+                     'Avg Killed per Event': 'Average Deaths per Event'  
+                 })
+
+# Update layout settings for the plot
+fig.update_layout(
+    showlegend=False,  # Hide the legend
+    width=680,  
+    height=400  
+)
+```
+
+### Risk Differences for Local vs. International Donors
+
+```{python}
+#| code-fold: true
+# Calculate total counts for nationals affected by attacks
+nationals = {
+    "Killed": df['Nationals killed'].sum(),  
+    "Kidnapped": df['Nationals kidnapped'].sum(), 
+    "Wounded": df['Nationals wounded'].sum(), 
+    "Total Affected": df['Total nationals'].sum()  
+}
+
+# Calculate total counts for internationals affected by attacks
+internationals = {
+    "Killed": df['Internationals killed'].sum(),  
+    "Kidnapped": df['Internationals kidnapped'].sum(),  
+    "Wounded": df['Internationals wounded'].sum(), 
+    "Total Affected": df['Total internationals'].sum()  
+}
+
+# Define the stages for the funnel chart in reverse order to match the funnel visualization
+stages = list(nationals.keys())[::-1]
+# Create lists of values for nationals and internationals for each stage
+x_nationals = [nationals[stage] for stage in stages]  
+x_internationals = [internationals[stage] for stage in stages]  
+
+# Initialize a figure for the funnel chart
+fig = go.Figure()
+
+# Add a funnel trace for nationals
+fig.add_trace(go.Funnel(
+    name='Nationals', 
+    orientation='h',  
+    y=stages,  
+    x=x_nationals,  
+    marker_color='lightblue'  
+))
+
+# Add a funnel trace for internationals
+fig.add_trace(go.Funnel(
+    name='Internationals', 
+    orientation='h',  
+    y=stages,  
+    x=x_internationals,  
+    marker_color='salmon'  
+))
+
+# Update the layout of the figure with a title
+fig.update_layout(
+    title='Comparison of Harm Funnel: Nationals vs Internationals' 
+)
+
+# Display the funnel chart
+fig.show()
+```
+
+### Risk Differences for Male vs. Female Donors
+
+```{python}
+#| code-fold: true
+# Define columns for gender counts
+gender_cols = ['Gender Male', 'Gender Female', 'Gender Unknown']
+
+# Fill missing values in gender columns with 0 and convert to integers
+df[gender_cols] = df[gender_cols].fillna(0).astype(int)
+
+# Calculate the total gender count for each row
+df['Total Gender Count'] = df[gender_cols].sum(axis=1)
+
+# -------- Chart 1: Gender Distribution Pie --------
+# Summarize total counts for each gender
+gender_total = df[gender_cols].sum().reset_index()
+gender_total.columns = ['Gender', 'Count']  
+gender_total['Percentage'] = gender_total['Count'] / gender_total['Count'].sum()  
+
+# Create a pie chart to visualize gender distribution
+pie_chart = alt.Chart(gender_total).mark_arc(innerRadius=60).encode(
+    theta=alt.Theta(field='Count', type='quantitative'),  # Angle based on count
+    color=alt.Color('Gender:N',
+        scale=alt.Scale(scheme='pastel1'),  
+        legend=alt.Legend(
+            title=None, 
+            labelFontSize=13,
+            symbolSize=150,
+            offset=-30  # Offset for legend positioning
+        )
+    ),
+    tooltip=[  # Tooltips for hover information
+        alt.Tooltip('Gender:N'),
+        alt.Tooltip('Count:Q'),
+        alt.Tooltip('Percentage:Q', format='.1%')  # Format percentage to one decimal
+    ]
+).properties(
+    width=300,  
+    height=260,  
+    title=alt.TitleParams(  
+        text='Gender Distribution of Affected Aid Workers',
+        anchor='middle',
+        fontSize=14,
+        font='Helvetica',
+        dy=-20  # Vertical adjustment for title
+    )
+)
+
+# -------- Chart 2: Bar by Attack Type --------
+# Filter DataFrame for entries with gender counts greater than 0
+df_gender = df[df['Total Gender Count'] > 0].copy()
+df_attack = df_gender[df_gender['Means of attack'] != 'Unknown'].copy() 
+
+# Group by attack type and summarize gender data
+attack_gender = df_attack.groupby('Means of attack')[['Gender Female', 'Total Gender Count']].sum().reset_index()
+# Calculate the proportion of female victims
+attack_gender['Female Share'] = attack_gender['Gender Female'] / attack_gender['Total Gender Count']
+
+# Create a bar chart to visualize the proportion of female victims by attack type
+bar_chart = alt.Chart(attack_gender).mark_bar(size=20, cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+    x=alt.X('Means of attack:N', sort='-y', title='Means of Attack'),  
+    y=alt.Y('Female Share:Q', axis=alt.Axis(format='%', title='Proportion Female')),  
+    color=alt.value('#f78fb3'),  
+    tooltip=[  # Tooltips for hover information
+        alt.Tooltip('Means of attack:N', title='Attack Type'),
+        alt.Tooltip('Gender Female:Q', title='Female Victims'),
+        alt.Tooltip('Total Gender Count:Q', title='Total Victims'),
+        alt.Tooltip('Female Share:Q', title='Female Share', format='.1%')  # Format female share to one decimal
+    ]
+).properties(
+    title='Proportion of Female Victims by Attack Type',  
+    width=400,  
+    height=300 
+)
+
+# -------- Combine: no config in children --------
+# Combine pie and bar charts horizontally
+combined = alt.hconcat(pie_chart, bar_chart)
+
+# -------- Apply global config on top-level container --------
+combined = alt.hconcat(
+    pie_chart, 
+    bar_chart, 
+    spacing=20  # Space between the charts
+).configure_view(
+    stroke=None  # Remove border from the view
+).configure_axis(
+    labelFontSize=10,  
+    titleFontSize=11  
+).configure_title(
+    fontSize=12,  
+    anchor='start',  
+    font='Helvetica'  
+).configure_legend(
+    title=None,  
+    orient='bottom'  
+)
+
+# Display the combined chart
+combined
+```
+
+```{python}
+#| code-fold: true
+# Define columns for organization roles
+role_cols = ['UN', 'INGO', 'ICRC', 'NRCS and IFRC', 'NNGO', 'Other']
+
+# Determine the primary role for each row based on the organization with the maximum value
+df['Primary Role'] = df[role_cols].idxmax(axis=1)
+
+# Assign gender based on counts of male and female
+df['Gender'] = np.where(
+    df['Gender Male'] > 0, 'Male',  
+    np.where(df['Gender Female'] > 0, 'Female', 'Unknown') 
+)
+
+# Define metrics to analyze
+metrics = ['Total killed', 'Total wounded', 'Total kidnapped']
+
+# Group by Primary Role and Gender, calculating the mean for the defined metrics
+risk_profile = df.groupby(['Primary Role', 'Gender'])[metrics].mean().reset_index()
+
+# Calculate the composite risk score using weighted contributions from each metric
+risk_profile['Composite Risk'] = (
+    0.5 * risk_profile['Total killed'] + 
+    0.3 * risk_profile['Total wounded'] + 
+    0.2 * risk_profile['Total kidnapped']  
+)
+
+# Normalize the composite risk score to a range of 0 to 1
+risk_profile['Risk_norm'] = (risk_profile['Composite Risk'] - risk_profile['Composite Risk'].min()) / \
+                             (risk_profile['Composite Risk'].max() - risk_profile['Composite Risk'].min())
+
+# Create a polar line plot to visualize the risk profile
+fig = px.line_polar(
+    risk_profile,
+    r='Risk_norm',  # Radial coordinates: normalized risk
+    theta='Primary Role',  # Angular coordinates: primary role
+    color='Gender',  
+    line_close=True,  
+    title='<b>Humanitarian Worker Risk Profile</b><br><sub>Normalized composite risk by role and gender (Killed 50% · Wounded 30% · Kidnapped 20%)</sub>', 
+    hover_data={'Composite Risk': ':.2f'},  
+    template='plotly_white',  
+    width=700,  
+    height=500,  
+    color_discrete_map={  # Custom colors for gender categories
+        'Male': '#1f77b4',
+        'Female': '#ff7f0e',
+        'Unknown': '#2ca02c'
+    }
+)
+
+# Update trace properties for better visualization
+fig.update_traces(
+    fill='toself',  
+    opacity=0.8,  
+    line=dict(width=2.5),  # Set line width
+    hovertemplate='<b>%{theta}</b><br>Gender: %{fullData.name}<br>Risk Score: %{r:.2f}<br>Composite: %{customdata[0]:.2f}<extra></extra>'  # Custom hover template
+)
+
+# Update layout properties for the plot
+fig.update_layout(
+    polar=dict(
+        radialaxis=dict(
+            visible=True,  
+            range=[0, 1],  
+            tickvals=[0, 0.5, 1], 
+            ticktext=['Low', 'Medium', 'High'] 
+        ),
+        angularaxis=dict(
+            linecolor='lightgray', 
+            gridcolor='rgba(200,200,200,0.3)', 
+            rotation=90  
+        ),
+        bgcolor='rgba(245,245,245,0.1)'  
+    ),
+    legend=dict(
+        orientation="h",  
+        yanchor="bottom", 
+        y=-0.15,  
+        xanchor="center",  
+        x=0.5,  
+        title=None, 
+        font=dict(size=12) 
+    ),
+    hoverlabel=dict(
+        bgcolor="white",  
+        font_size=12,  
+        font_family="Arial"  
+    ),
+    font=dict(
+        family="Arial",  
+        size=12,  
+        color="#333333"  
+    ),
+    margin=dict(t=100, b=80),  
+    plot_bgcolor='white', 
+    paper_bgcolor='white'  
+)
+
+# Clean up the trace names to display gender correctly
+fig.for_each_trace(
+    lambda trace: trace.update(
+        name=trace.name.split('=')[-1]  # Extract the gender name from the trace name
+    ) if 'Gender' in trace.name else ()
+)
+
+# Display the final plot
+fig.show()
+```
+
+# Normative Portion
